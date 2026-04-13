@@ -1,0 +1,660 @@
+#compdef nft
+
+# Zsh completion for nft (nftables)
+# Install: place this file as `_nft` anywhere on your $fpath, then
+#          run `compinit` (or restart your shell).
+#
+# Dynamic completions (existing tables, chains, sets, maps) are fetched
+# live from the running kernel via `nft list ...`. Requires read access
+# to nftables (usually root, or CAP_NET_ADMIN).
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ primitives ━━
+
+# Returns 0 if $1 is a valid nftables address family name.
+_nft_is_family() {
+  [[ $1 == (ip|ip6|inet|arp|bridge|netdev) ]]
+}
+
+# Completes address family names with descriptions.
+_nft_complete_family() {
+  local -a fams
+  fams=(
+    'ip:IPv4 address family'
+    'ip6:IPv6 address family'
+    'inet:IPv4/IPv6 dual-stack (inet) address family'
+    'arp:ARP address family'
+    'bridge:Bridge address family'
+    'netdev:Netdev address family (ingress / egress hooks)'
+  )
+  _describe -t family 'address family' fams
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ live-data helpers ━
+
+# Print table names to stdout; optionally filter by address family.
+# Usage: _nft_tables [family]
+_nft_tables() {
+  if [[ -n $1 ]]; then
+    nft list tables "$1" 2>/dev/null | awk '{print $3}'
+  else
+    nft list tables 2>/dev/null | awk '{print $3}'
+  fi
+}
+
+# Print chain names for a given table.
+# Usage: _nft_chains [family] table
+_nft_chains() {
+  local fam=$1 tbl=$2
+  [[ -z $tbl ]] && return
+  nft list table ${fam:+"$fam"} "$tbl" 2>/dev/null \
+    | awk '/^[[:space:]]+chain [[:alnum:]_-]/ { print $2 }'
+}
+
+# Print set names for a given table.
+# Usage: _nft_sets [family] table
+_nft_sets() {
+  local fam=$1 tbl=$2
+  [[ -z $tbl ]] && return
+  nft list table ${fam:+"$fam"} "$tbl" 2>/dev/null \
+    | awk '/^[[:space:]]+set [[:alnum:]_-]/ { print $2 }'
+}
+
+# Print map names for a given table.
+# Usage: _nft_maps [family] table
+_nft_maps() {
+  local fam=$1 tbl=$2
+  [[ -z $tbl ]] && return
+  nft list table ${fam:+"$fam"} "$tbl" 2>/dev/null \
+    | awk '/^[[:space:]]+map [[:alnum:]_-]/ { print $2 }'
+}
+
+# Print both set and map names for a given table (for `element` operations,
+# which apply to either).
+# Usage: _nft_setmaps [family] table
+_nft_setmaps() {
+  local fam=$1 tbl=$2
+  [[ -z $tbl ]] && return
+  nft list table ${fam:+"$fam"} "$tbl" 2>/dev/null \
+    | awk '/^[[:space:]]+(set|map) [[:alnum:]_-]/ { print $2 }'
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ positional completers ━
+#
+# These helpers are called with obj_pos = the index of the object-type
+# keyword (e.g. "table", "chain", …) within $words.  CURRENT is always
+# the zsh-global cursor-word index.
+#
+# The grammar for most subcommands follows one of:
+#   [family] <table>
+#   [family] <table> <chain>
+#   [family] <table> <set|map>
+
+# Complete:  [family] <table>
+_nft_comp_family_table() {
+  local -i op=$1
+  local -i rel=$(( CURRENT - op ))
+  case $rel in
+    1)
+      local -a items
+      items=(ip ip6 inet arp bridge netdev ${(f)"$(_nft_tables)"})
+      _describe -t completions 'family or table name' items
+      ;;
+    2)
+      local w=${words[op+1]}
+      if _nft_is_family "$w"; then
+        local -a tbls=(${(f)"$(_nft_tables "$w")"})
+        _describe -t tables 'table name' tbls
+      fi
+      ;;
+  esac
+}
+
+# Complete:  [family] <table> <chain>
+_nft_comp_family_table_chain() {
+  local -i op=$1
+  local -i rel=$(( CURRENT - op ))
+  case $rel in
+    1)
+      local -a items
+      items=(ip ip6 inet arp bridge netdev ${(f)"$(_nft_tables)"})
+      _describe -t completions 'family or table name' items
+      ;;
+    2)
+      local w=${words[op+1]}
+      if _nft_is_family "$w"; then
+        local -a tbls=(${(f)"$(_nft_tables "$w")"})
+        _describe -t tables 'table name' tbls
+      else
+        local -a chns=(${(f)"$(_nft_chains '' "$w")"})
+        _describe -t chains 'chain name' chns
+      fi
+      ;;
+    3)
+      local w1=${words[op+1]} w2=${words[op+2]}
+      if _nft_is_family "$w1"; then
+        local -a chns=(${(f)"$(_nft_chains "$w1" "$w2")"})
+        _describe -t chains 'chain name' chns
+      fi
+      ;;
+  esac
+}
+
+# Complete:  [family] <table> <set>
+_nft_comp_family_table_set() {
+  local -i op=$1
+  local -i rel=$(( CURRENT - op ))
+  case $rel in
+    1)
+      local -a items
+      items=(ip ip6 inet arp bridge netdev ${(f)"$(_nft_tables)"})
+      _describe -t completions 'family or table name' items
+      ;;
+    2)
+      local w=${words[op+1]}
+      if _nft_is_family "$w"; then
+        local -a tbls=(${(f)"$(_nft_tables "$w")"})
+        _describe -t tables 'table name' tbls
+      else
+        local -a sets=(${(f)"$(_nft_sets '' "$w")"})
+        _describe -t sets 'set name' sets
+      fi
+      ;;
+    3)
+      local w1=${words[op+1]} w2=${words[op+2]}
+      if _nft_is_family "$w1"; then
+        local -a sets=(${(f)"$(_nft_sets "$w1" "$w2")"})
+        _describe -t sets 'set name' sets
+      fi
+      ;;
+  esac
+}
+
+# Complete:  [family] <table> <map>
+_nft_comp_family_table_map() {
+  local -i op=$1
+  local -i rel=$(( CURRENT - op ))
+  case $rel in
+    1)
+      local -a items
+      items=(ip ip6 inet arp bridge netdev ${(f)"$(_nft_tables)"})
+      _describe -t completions 'family or table name' items
+      ;;
+    2)
+      local w=${words[op+1]}
+      if _nft_is_family "$w"; then
+        local -a tbls=(${(f)"$(_nft_tables "$w")"})
+        _describe -t tables 'table name' tbls
+      else
+        local -a maps=(${(f)"$(_nft_maps '' "$w")"})
+        _describe -t maps 'map name' maps
+      fi
+      ;;
+    3)
+      local w1=${words[op+1]} w2=${words[op+2]}
+      if _nft_is_family "$w1"; then
+        local -a maps=(${(f)"$(_nft_maps "$w1" "$w2")"})
+        _describe -t maps 'map name' maps
+      fi
+      ;;
+  esac
+}
+
+# Complete:  [family] <table> <set-or-map>
+# Used for `element` operations which apply to both sets and maps.
+_nft_comp_family_table_setmap() {
+  local -i op=$1
+  local -i rel=$(( CURRENT - op ))
+  case $rel in
+    1)
+      local -a items
+      items=(ip ip6 inet arp bridge netdev ${(f)"$(_nft_tables)"})
+      _describe -t completions 'family or table name' items
+      ;;
+    2)
+      local w=${words[op+1]}
+      if _nft_is_family "$w"; then
+        local -a tbls=(${(f)"$(_nft_tables "$w")"})
+        _describe -t tables 'table name' tbls
+      else
+        local -a sm=(${(f)"$(_nft_setmaps '' "$w")"})
+        _describe -t sets 'set or map name' sm
+      fi
+      ;;
+    3)
+      local w1=${words[op+1]} w2=${words[op+2]}
+      if _nft_is_family "$w1"; then
+        local -a sm=(${(f)"$(_nft_setmaps "$w1" "$w2")"})
+        _describe -t sets 'set or map name' sm
+      fi
+      ;;
+  esac
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ subcommand handlers ━
+#
+# Each handler receives sp = index of the subcommand word in $words
+# (always 1 when called from the ->args state of _arguments -C).
+
+# ── list ─────────────────────────────────────────────────────────────────
+_nft_cmd_list() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  local -a objs
+  objs=(
+    'ruleset:List the complete ruleset'
+    'tables:List all tables'
+    'table:List a specific table and its content'
+    'chains:List all chains (across all tables)'
+    'chain:List a specific chain and its rules'
+    'sets:List all named sets (across all tables)'
+    'set:List a specific named set'
+    'maps:List all maps (across all tables)'
+    'map:List a specific map'
+    'flowtables:List all flowtables'
+    'flowtable:List a specific flowtable'
+    'counters:List all named counters'
+    'counter:List a specific named counter'
+    'quotas:List all named quotas'
+    'quota:List a specific named quota'
+    'limits:List all named limits'
+    'limit:List a specific named limit'
+    'secmarks:List all secmark objects'
+    'secmark:List a specific secmark object'
+    'synproxies:List all synproxy objects'
+    'synproxy:List a specific synproxy object'
+    'meters:List all meters'
+    'meter:List a specific meter'
+    'hooks:List registered netfilter hooks'
+  )
+
+  (( rel == 1 )) && { _describe -t list-objects 'object type' objs; return }
+
+  local obj=${words[sp+1]}
+  local -i op=$(( sp + 1 ))
+
+  case $obj in
+    ruleset)
+      (( rel == 2 )) && _nft_complete_family
+      ;;
+    tables|chains|sets|maps|flowtables|counters|quotas|limits|secmarks|synproxies|meters|hooks)
+      (( rel == 2 )) && _nft_complete_family
+      ;;
+    table|flowtable|counter|quota|limit|secmark|synproxy|meter)
+      _nft_comp_family_table $op
+      ;;
+    chain)
+      _nft_comp_family_table_chain $op
+      ;;
+    set)
+      _nft_comp_family_table_set $op
+      ;;
+    map)
+      _nft_comp_family_table_map $op
+      ;;
+  esac
+}
+
+# ── add / create ──────────────────────────────────────────────────────────
+_nft_cmd_add_create() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  local -a objs
+  objs=(
+    'table:Add a table'
+    'chain:Add a chain to a table'
+    'rule:Append a rule to a chain'
+    'set:Add a named set to a table'
+    'map:Add a map to a table'
+    'element:Add element(s) to a set or map'
+    'flowtable:Add a flowtable (software fastpath)'
+    'counter:Add a named counter object'
+    'quota:Add a named quota object'
+    'limit:Add a named rate-limit object'
+    'secmark:Add a secmark object'
+    'synproxy:Add a synproxy object'
+  )
+
+  (( rel == 1 )) && { _describe -t add-objects 'object type' objs; return }
+
+  local obj=${words[sp+1]}
+  local -i op=$(( sp + 1 ))
+
+  case $obj in
+    table)
+      _nft_comp_family_table $op
+      ;;
+    chain|rule)
+      _nft_comp_family_table_chain $op
+      ;;
+    set|flowtable|counter|quota|limit|secmark|synproxy)
+      _nft_comp_family_table $op
+      ;;
+    map)
+      _nft_comp_family_table $op
+      ;;
+    element)
+      _nft_comp_family_table_setmap $op
+      ;;
+  esac
+}
+
+# ── delete ────────────────────────────────────────────────────────────────
+_nft_cmd_delete() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  local -a objs
+  objs=(
+    'table:Delete a table (and all its contents)'
+    'chain:Delete a chain (must be empty)'
+    'rule:Delete a rule by handle number'
+    'set:Delete a named set'
+    'map:Delete a map'
+    'element:Delete element(s) from a set or map'
+    'flowtable:Delete a flowtable'
+    'counter:Delete a named counter object'
+    'quota:Delete a named quota object'
+    'limit:Delete a named rate-limit object'
+    'secmark:Delete a secmark object'
+    'synproxy:Delete a synproxy object'
+  )
+
+  (( rel == 1 )) && { _describe -t del-objects 'object type' objs; return }
+
+  local obj=${words[sp+1]}
+  local -i op=$(( sp + 1 ))
+
+  case $obj in
+    table)
+      _nft_comp_family_table $op
+      ;;
+    chain|rule)
+      _nft_comp_family_table_chain $op
+      ;;
+    set|flowtable|counter|quota|limit|secmark|synproxy)
+      _nft_comp_family_table $op
+      ;;
+    map)
+      _nft_comp_family_table_map $op
+      ;;
+    element)
+      _nft_comp_family_table_setmap $op
+      ;;
+  esac
+}
+
+# ── flush ─────────────────────────────────────────────────────────────────
+_nft_cmd_flush() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  local -a objs
+  objs=(
+    'ruleset:Delete the complete ruleset (all tables, chains, rules)'
+    'table:Remove all chains and rules from a table'
+    'chain:Remove all rules from a chain'
+    'set:Remove all elements from a named set'
+    'map:Remove all elements from a map'
+  )
+
+  (( rel == 1 )) && { _describe -t flush-objects 'object type' objs; return }
+
+  local obj=${words[sp+1]}
+  local -i op=$(( sp + 1 ))
+
+  case $obj in
+    ruleset)
+      (( rel == 2 )) && _nft_complete_family
+      ;;
+    table)
+      _nft_comp_family_table $op
+      ;;
+    chain)
+      _nft_comp_family_table_chain $op
+      ;;
+    set)
+      _nft_comp_family_table_set $op
+      ;;
+    map)
+      _nft_comp_family_table_map $op
+      ;;
+  esac
+}
+
+# ── rename ────────────────────────────────────────────────────────────────
+_nft_cmd_rename() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  if (( rel == 1 )); then
+    local -a objs; objs=('chain:Rename a chain')
+    _describe -t rename-objects 'object type' objs
+    return
+  fi
+
+  local obj=${words[sp+1]}
+  local -i op=$(( sp + 1 ))
+
+  case $obj in
+    chain)
+      local -i chain_rel=$(( CURRENT - op ))
+      if (( chain_rel >= 1 && chain_rel <= 3 )); then
+        _nft_comp_family_table_chain $op
+      elif (( chain_rel == 4 )); then
+        _message 'new chain name'
+      fi
+      ;;
+  esac
+}
+
+# ── insert / replace ──────────────────────────────────────────────────────
+_nft_cmd_insert_replace() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  if (( rel == 1 )); then
+    local -a objs; objs=('rule:A rule (insert before or replace by handle)')
+    _describe -t objects 'object type' objs
+    return
+  fi
+
+  local obj=${words[sp+1]}
+  case $obj in
+    rule) _nft_comp_family_table_chain $(( sp + 1 )) ;;
+  esac
+}
+
+# ── get ───────────────────────────────────────────────────────────────────
+_nft_cmd_get() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  if (( rel == 1 )); then
+    local -a objs; objs=('element:Look up an element in a set or map')
+    _describe -t objects 'object type' objs
+    return
+  fi
+
+  local obj=${words[sp+1]}
+  case $obj in
+    element) _nft_comp_family_table_setmap $(( sp + 1 )) ;;
+  esac
+}
+
+# ── reset ─────────────────────────────────────────────────────────────────
+_nft_cmd_reset() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  local -a objs
+  objs=(
+    'counters:Reset packet/byte counts on all named counters'
+    'counter:Reset packet/byte counts on a specific named counter'
+    'quotas:Reset all named quota objects'
+    'quota:Reset a specific named quota object'
+    'rules:Reset stateful expressions (counters, limits) in all rules'
+    'rule:Reset stateful expressions in a specific rule by handle'
+    'set:Reset stateful expressions in a set'
+    'map:Reset stateful expressions in a map'
+    'element:Reset stateful expressions in a set/map element'
+  )
+
+  (( rel == 1 )) && { _describe -t reset-objects 'object type' objs; return }
+
+  local obj=${words[sp+1]}
+  local -i op=$(( sp + 1 ))
+
+  case $obj in
+    counters|quotas)
+      (( rel == 2 )) && _nft_complete_family
+      ;;
+    counter|quota)
+      _nft_comp_family_table $op
+      ;;
+    rules)
+      _nft_comp_family_table_chain $op
+      ;;
+    rule)
+      _nft_comp_family_table_chain $op
+      ;;
+    set)
+      _nft_comp_family_table_set $op
+      ;;
+    map)
+      _nft_comp_family_table_map $op
+      ;;
+    element)
+      _nft_comp_family_table_setmap $op
+      ;;
+  esac
+}
+
+# ── monitor ───────────────────────────────────────────────────────────────
+_nft_cmd_monitor() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  local -a qualifiers obj_types
+
+  qualifiers=(
+    'new:Only report creation events'
+    'destroy:Only report deletion events'
+  )
+  obj_types=(
+    'tables:Monitor table events'
+    'chains:Monitor chain events'
+    'rules:Monitor rule events'
+    'sets:Monitor set events'
+    'elements:Monitor set/map element events'
+    'trace:Monitor rule packet-trace events'
+  )
+
+  case $rel in
+    1)
+      local -a all=($qualifiers $obj_types)
+      _describe -t monitor-opts 'event filter' all
+      ;;
+    2)
+      local w=${words[sp+1]}
+      case $w in
+        new|destroy)
+          _describe -t monitor-objects 'object type' obj_types ;;
+      esac
+      ;;
+  esac
+}
+
+# ── export / import ───────────────────────────────────────────────────────
+_nft_cmd_export_import() {
+  local -i sp=$1
+  local -i rel=$(( CURRENT - sp ))
+
+  if (( rel == 1 )); then
+    local -a fmts
+    fmts=(
+      'json:JSON format (recommended)'
+      'xml:XML format (legacy)'
+    )
+    _describe -t formats 'ruleset format' fmts
+  fi
+}
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ main ━━
+
+_nft() {
+  local context state state_descr line
+  typeset -A opt_args
+  local curcontext="$curcontext"
+
+  # Global options + subcommand dispatch.
+  # -C enables state-machine completion; '*:: :->args' captures the rest
+  # after option processing and sets words[1] = subcommand.
+  _arguments -C \
+    '(-h --help)'{-h,--help}'[show help message and exit]' \
+    '(-v --version)'{-v,--version}'[print version information and exit]' \
+    '(-c --check)'{-c,--check}'[check commands for validity without applying any changes]' \
+    '(-f --file)'{-f,--file}'[read input from a file instead of stdin]:ruleset file:_files' \
+    '(-i --interactive)'{-i,--interactive}'[read input from an interactive readline prompt]' \
+    '(-n --numeric)'{-n,--numeric}'[output numeric values instead of resolving names]' \
+    '(-s --stateless)'{-s,--stateless}'[omit stateful information (counters, limits) from output]' \
+    '(-N --reversedns)'{-N,--reversedns}'[translate IP addresses to DNS names in output]' \
+    '(-u --guid)'{-u,--guid}'[translate numeric UID/GID values to names in output]' \
+    '(-p --numeric-protocol)'{-p,--numeric-protocol}'[display layer 4 protocol numbers instead of names]' \
+    '(-y --numeric-priority)'{-y,--numeric-priority}'[display chain priority values numerically]' \
+    '(-e --echo)'{-e,--echo}'[echo what was added/inserted/replaced after each operation]' \
+    '(-j --json)'{-j,--json}'[format output as JSON and accept JSON as input]' \
+    '(-d --debug)'{-d,--debug}'[enable debugging output]' \
+    '(-a --handle)'{-a,--handle}'[output handle numbers alongside object definitions]' \
+    '(-t --terse)'{-t,--terse}'[terse output: show set/map definitions but omit their elements]' \
+    '1:nft subcommand:->command' \
+    '*:: :->args' \
+    && return 0
+
+  case $state in
+    command)
+      local -a cmds
+      cmds=(
+        'list:List ruleset objects'
+        'add:Add a ruleset object'
+        'create:Create a ruleset object (fail if it already exists)'
+        'delete:Delete a ruleset object'
+        'flush:Remove all content from a ruleset object'
+        'rename:Rename a chain'
+        'insert:Insert a rule before another rule (by position or handle)'
+        'replace:Replace a rule by handle'
+        'get:Look up an element in a set or map'
+        'reset:Reset stateful data (counters, quotas, limits) in objects'
+        'monitor:Listen for and print netfilter events in real time'
+        'export:Export the ruleset in a machine-readable format'
+        'import:Import (apply) a ruleset from a machine-readable file'
+        'describe:Describe a data type or expression keyword'
+      )
+      _describe -t commands 'nft subcommand' cmds
+      ;;
+
+    args)
+      # In the ->args state, _arguments -C has shifted $words so that:
+      #   words[1] = subcommand   (e.g. "list")
+      #   words[2] = object type  (e.g. "table", "chain", …)
+      #   words[3+] = subcommand arguments
+      # and $CURRENT is the index of the word being completed.
+      local cmd=$words[1]
+      case $cmd in
+        list)            _nft_cmd_list           1 ;;
+        add|create)      _nft_cmd_add_create     1 ;;
+        delete)          _nft_cmd_delete         1 ;;
+        flush)           _nft_cmd_flush          1 ;;
+        rename)          _nft_cmd_rename         1 ;;
+        insert|replace)  _nft_cmd_insert_replace 1 ;;
+        get)             _nft_cmd_get            1 ;;
+        reset)           _nft_cmd_reset          1 ;;
+        monitor)         _nft_cmd_monitor        1 ;;
+        export|import)   _nft_cmd_export_import  1 ;;
+      esac
+      ;;
+  esac
+}
+
+_nft "$@"
